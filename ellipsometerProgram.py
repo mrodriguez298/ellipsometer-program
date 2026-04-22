@@ -1,12 +1,13 @@
 '''
-Desktop GUI for Thorlabs ellipsometer CSV exports.
+Desktop GUI for Thorlabs ellipsometer CSV/XLSX exports.
 
-The operator selects a waveplate part number and a CSV file, the app runs a Lu-Chipman 
-decomposition on every row (one 4x4 Mueller matrix per wavelength) and reports:
+The operator selects a waveplate part number and a data file (.csv or .xlsx),
+the app runs a Lu-Chipman decomposition on every row (one 4x4 Mueller matrix
+per wavelength) and reports:
   - Single-wavelength waveplates (WPH*/WPQ*): retardance at the design
     wavelength plus a PASS/FAIL verdict against the Thorlabs tolerance.
   - Broadband achromatics ending in -340 (AHWP*-340 / AQWP*-340):
-    a retardance-vs-wavelength plot from 260 nm to 410 nm.
+    a retardance-vs-wavelength plot across all measured wavelengths.
 
 Created by Miguel Rodriguez (Seasonal Engineer) Spring 2026.
 '''
@@ -36,7 +37,22 @@ PART_NUMBERS: list[str] = [
     "AQWP05M-340", "AQWP10M-340",
     "AHWP05M-340", "AHWP10M-340",
 ]
-ACHROMATIC_PLOT_RANGE_NM = (260, 410)
+SUPPORTED_FILETYPES = [
+    ("Ellipsometer data", "*.csv *.xlsx"),
+    ("CSV files", "*.csv"),
+    ("Excel files", "*.xlsx"),
+    ("All files", "*.*"),
+]
+
+def _read_ellipsometer_file(path: str) -> pd.DataFrame:
+    '''
+    Load an ellipsometer export from CSV or XLSX. The first row is a header
+    block emitted by the Thorlabs software and is skipped.
+    '''
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".xlsx":
+        return pd.read_excel(path, skiprows=1)
+    return pd.read_csv(path, skiprows=1)
 
 def parse_part_number(pn: str) -> dict:
     '''
@@ -93,11 +109,11 @@ def retardance_at_design_wavelength(
 
 def compute_retardance(csv_path: str) -> tuple[np.ndarray, np.ndarray]:
     '''
-    Run Lu-Chipman decomposition on an ellipsometer CSV export.
+    Run Lu-Chipman decomposition on an ellipsometer CSV or XLSX export.
 
     Returns (wavelengths_nm, retardance_waves) where retardance is expressed in units of waves (0.5 = half-wave, 0.25 = quarter-wave).
     '''
-    df = pd.read_csv(csv_path, skiprows=1)
+    df = _read_ellipsometer_file(csv_path)
     df = df.drop(df.iloc[:, 17:], axis=1)
     MM_array = df.to_numpy()
     nolam = np.delete(MM_array, 0, 1)
@@ -201,7 +217,7 @@ class SingleFileTab(ttk.Frame):
             width=24,
         ).grid(row=0, column=1, sticky="w", padx=(6, 18))
 
-        ttk.Label(controls, text="CSV File:").grid(row=0, column=2, sticky="w")
+        ttk.Label(controls, text="Data File:").grid(row=0, column=2, sticky="w")
         self.file_var = tk.StringVar()
         ttk.Entry(controls, textvariable=self.file_var, width=48).grid(
             row=0, column=3, sticky="we", padx=(6, 6)
@@ -230,8 +246,8 @@ class SingleFileTab(ttk.Frame):
 
     def _browse(self) -> None:
         path = filedialog.askopenfilename(
-            title="Select ellipsometer CSV",
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+            title="Select ellipsometer data file",
+            filetypes=SUPPORTED_FILETYPES,
         )
         if path:
             self.file_var.set(path)
@@ -243,7 +259,7 @@ class SingleFileTab(ttk.Frame):
             messagebox.showerror("Missing input", "Select a part number.")
             return
         if not path or not os.path.isfile(path):
-            messagebox.showerror("Missing input", "Select a valid CSV file.")
+            messagebox.showerror("Missing input", "Select a valid CSV or XLSX file.")
             return
 
         try:
@@ -317,19 +333,16 @@ class SingleFileTab(ttk.Frame):
         retardance: np.ndarray,
         pn: str,
     ) -> None:
-        lo_nm, hi_nm = ACHROMATIC_PLOT_RANGE_NM
         order = np.argsort(wavelengths)
         wl_sorted = wavelengths[order]
         ret_sorted = retardance[order]
-        mask = (wl_sorted >= lo_nm) & (wl_sorted <= hi_nm)
 
         fig = Figure(figsize=(7.2, 4.6), dpi=100)
         ax = fig.add_subplot(111)
-        ax.plot(wl_sorted[mask], ret_sorted[mask], color="#1565c0", linewidth=1.8)
+        ax.plot(wl_sorted, ret_sorted, color="#1565c0", linewidth=1.8)
         ax.set_xlabel("Wavelength (nm)")
         ax.set_ylabel("Retardance (waves)")
         ax.set_title(f"{pn} — retardance vs. wavelength")
-        ax.set_xlim(lo_nm, hi_nm)
         ax.grid(True, linestyle=":", alpha=0.6)
         fig.tight_layout()
 
@@ -406,8 +419,8 @@ class BatchTab(ttk.Frame):
 
     def _select_files(self) -> None:
         paths = filedialog.askopenfilenames(
-            title="Select ellipsometer CSVs",
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+            title="Select ellipsometer data files",
+            filetypes=SUPPORTED_FILETYPES,
         )
         if paths:
             self._paths = list(paths)
@@ -423,7 +436,7 @@ class BatchTab(ttk.Frame):
             messagebox.showerror("Missing input", "Select a part number.")
             return
         if not self._paths:
-            messagebox.showerror("Missing input", "Select one or more CSV files.")
+            messagebox.showerror("Missing input", "Select one or more CSV or XLSX files.")
             return
 
         try:
